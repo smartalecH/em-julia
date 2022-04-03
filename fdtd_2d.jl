@@ -1,21 +1,33 @@
 #=
+Copyright Alec Hammond 2022
+
 Simple fdtd in 2d excercise.
 
 Assumes TMᶻ polarization. Relevant physics:
-    −σₘHx − μ∂Hx/∂t = ∂Ez/∂y
-     σₘHy + μ∂Hy/∂t = ∂Ez/∂x
-     σ Ez + ε∂Ez/∂t = ∂Hy/∂x - ∂Hx/∂y
+    −σₐHx − μ∂Hx/∂t = ∂Ez/∂y
+     σₐHy + μ∂Hy/∂t = ∂Ez/∂x
+     σEz + ε∂Ez/∂t = ∂Hy/∂x - ∂Hx/∂y
+where
+    σₐ is the magnetic conductivity
+    σ is the electric conductivity
+    ε is the permittivity  
+    μ is the permeability  
 
-     Define Ez in lower left corner: Ez(m,n)
+Define Ez in lower left corner: Ez(m,n)
 Define Hy just to the right:    Hy(m+1/2,n)
 Define Hx just above:           Hx(m,n+1/2)
 
 Nodes at top of grid lack Hx
 Nodes at right of grid lack Hy
+
+References
+-------------------
+* https://eecs.wsu.edu/~schneidj/ufdtd/chap8.pdf
+
 =#
 
 const USE_GPU = false
-#using ImplicitGlobalGrid
+using ImplicitGlobalGrid
 using ParallelStencil
 using ParallelStencil.FiniteDifferences2D
 using Plots, Printf, Statistics
@@ -29,19 +41,25 @@ else
 end
 
 @parallel function step_H!(Hx::Data.Array,Hy::Data.Array,Ez::Data.Array,dt::Data.Number,dx::Data.Number,dy::Data.Number)
+    # assume σₐ=0
+    # assume μ=1
     @all(Hx) = @all(Hx) - dt/dy*@d_ya(Ez)
-    @all(Hy) = @all(Hy) - dt/dx*@d_xa(Ez)
+    @all(Hy) = @all(Hy) + dt/dx*@d_xa(Ez)
     return
 end
 
 @parallel function step_E!(Hx::Data.Array,Hy::Data.Array,Ez::Data.Array,ε::Data.Array,dt::Data.Number, dx::Data.Number, dy::Data.Number)
+    # assume σ=0
     @inn(Ez) = @inn(Ez) + (dt/dx./@inn(ε)).*(@d_xi(Hy)) - (dt/dy./@inn(ε)).*(@d_yi(Hx))
     return
 end
 
 @parallel_indices (ix,iy) function step_E_sources!(Ez::Data.Array,n::Int64,dt::Data.Number, dx::Data.Number, dy::Data.Number)
-    t = 
-    if (ix==size(Ez,1)/2 && iy==size(Ez,2)/2) Ez[ix,iy] += 1e-3; end;
+    # point source in center of cell
+    if (ix==size(Ez,1)/2 && iy==size(Ez,2)/2)
+        t = n*dt 
+        Ez[ix,iy] = cos(20*t)*exp((t-5)^2)
+    end
     return
 end
 
@@ -55,12 +73,12 @@ end
 function fdtd2D()
 
     # Physics
-    lx, ly = 10.0, 10.0;
+    lx, ly = 1.0, 1.0;
 
     # Numerics
     C      = 0.5;        # Courant factor
     nx, ny = 256, 256;
-    nt     = 50;
+    nt     = 250;
 
     # Derived numerics
     dx, dy    = lx/(nx-1), ly/(ny-1) # cell sizes
@@ -71,12 +89,13 @@ function fdtd2D()
     Hy       = @zeros(nx-1, ny);
     Ez       = @zeros(nx, ny);
     ε        = @ones(nx, ny);
-
+    @printf("Starting...\n")
     # Time loop
     for it = 1:nt
         if (it==11)  global wtime0 = Base.time()  end
         fdtd2D_step!(Hx,Hy,Ez,ε,it,dt,dx,dy)
     end
+    @printf("Stopping...\n")
 
     # Performance
     wtime    = Base.time() - wtime0
@@ -86,7 +105,7 @@ function fdtd2D()
     
     @printf("Total steps=%d, time=%1.3e sec (@ T_eff = %1.2f GB/s) \n", nt, wtime, round(T_eff, sigdigits=2))
     gr()
-    heatmap(Ez, color = :greys,show = true)
+    hm = heatmap(Ez, color = :bluesreds, aspect_ratio=:equal, show = true)
     png("Test")
     return
 end
